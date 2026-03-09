@@ -213,3 +213,4 @@ ui/dist/
 # Local env
 backend/.env
 ui/.env
+certs/*

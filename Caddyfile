@@ -1,0 +1,5 @@
+gateway.local:443 {
+    #tls ./certs/echo.pem ./certs/echo-key.pem
+    #reverse_proxy localhost 8000
+    respond "Proxy disabled for testing"
+}
