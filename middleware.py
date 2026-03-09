@@ -1,93 +1,73 @@
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-import httpx
-from config import VAULT_ADDR, VAULT_AUTH_PATH, EXCLUDED_PATHS
+from config import EXCLUDED_PATHS
+from services.boundary_service import boundary_service
+from services.vault_service import vault_service
 
 
 class AuthorizationMiddleware(BaseHTTPMiddleware):
-    """Validates authorization header against Vault for each request"""
+    """Validates X-Boundary-Credential and X-API-KEY headers"""
 
     async def dispatch(self, request: Request, call_next):
-        # Skip auth for excluded paths
         if request.url.path in EXCLUDED_PATHS:
             return await call_next(request)
 
-        # Extract authorization header
-        auth_header = request.headers.get("Authorization")
-        if not auth_header:
+        credential_id = request.headers.get("X-Boundary-Credential")
+        api_key = request.headers.get("X-API-KEY")
+
+        if not credential_id:
             return JSONResponse(
                 status_code=401,
-                content={
-                    "hasErrors": True,
-                    "data": {"error": "Authorization header missing"}
-                }
+                content={"hasErrors": True, "data": {"error": "X-Boundary-Credential header missing"}}
             )
 
-        # Extract token from Bearer scheme
-        token = self._extract_token(auth_header)
-        if not token:
+        if not api_key:
             return JSONResponse(
                 status_code=401,
-                content={
-                    "hasErrors": True,
-                    "data": {"error": "Invalid authorization format. Use: Bearer <token>"}
-                }
+                content={"hasErrors": True, "data": {"error": "X-API-KEY header missing"}}
             )
 
-        # Validate token against Vault
-        is_valid, error_msg = await self._validate_token(token)
+        is_valid, error_msg = await self._validate_credentials(credential_id, api_key)
         if not is_valid:
             return JSONResponse(
                 status_code=403,
-                content={
-                    "hasErrors": True,
-                    "data": {"error": error_msg}
-                }
+                content={"hasErrors": True, "data": {"error": error_msg}}
             )
 
-        # Process request and wrap response
         try:
             response = await call_next(request)
             return await self._wrap_response(response)
         except Exception as e:
             return JSONResponse(
                 status_code=500,
-                content={
-                    "hasErrors": True,
-                    "data": {"error": f"Internal server error: {str(e)}"}
-                }
+                content={"hasErrors": True, "data": {"error": f"Internal server error: {str(e)}"}}
             )
 
-    def _extract_token(self, auth_header: str) -> str:
-        """Extract token from Authorization header"""
-        parts = auth_header.split()
-        if len(parts) == 2 and parts[0].lower() == "bearer":
-            return parts[1]
-        return ""
-
-    async def _validate_token(self, token: str) -> tuple[bool, str]:
-        """Validate token against Vault"""
-        vault_url = f"{VAULT_ADDR}/{VAULT_AUTH_PATH}"
-        
+    async def _validate_credentials(self, credential_id: str, api_key: str) -> tuple[bool, str]:
+        """Validate credentials through Boundary and Vault"""
         try:
-            async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
-                response = await client.get(
-                    vault_url,
-                    headers={"X-Vault-Token": token}
-                )
-                
-                if response.status_code == 200:
-                    return True, ""
-                elif response.status_code == 403:
-                    return False, "Invalid or expired token"
-                else:
-                    return False, f"Token validation failed: {response.status_code}"
-                    
-        except httpx.TimeoutException:
-            return False, "Vault validation timeout"
-        except httpx.RequestError as e:
-            return False, f"Vault connection error: {str(e)}"
+            vault_path = await boundary_service.get_credential_path(credential_id)
+            if not vault_path:
+                return False, "Invalid credential ID or Boundary API error"
+
+            vault_token = await vault_service.create_token()
+            if not vault_token:
+                return False, "Failed to create Vault token"
+
+            secret_data = await vault_service.get_secret(vault_path, vault_token)
+            if not secret_data:
+                return False, "Failed to fetch secret from Vault"
+
+            stored_api_key = secret_data.get("data", {}).get("data", {}).get("api_key")
+            if not stored_api_key:
+                return False, "API key not found in Vault secret"
+
+            if stored_api_key != api_key:
+                return False, "Invalid API key"
+
+            return True, ""
+
         except Exception as e:
             return False, f"Validation error: {str(e)}"
 
@@ -102,10 +82,7 @@ class AuthorizationMiddleware(BaseHTTPMiddleware):
                 import json
                 data = json.loads(body.decode())
                 wrapped = {"hasErrors": False, "data": data}
-                return JSONResponse(
-                    status_code=response.status_code,
-                    content=wrapped
-                )
+                return JSONResponse(status_code=response.status_code, content=wrapped)
             except:
                 return response
         return response

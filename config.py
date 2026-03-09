@@ -14,6 +14,15 @@ CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI")
 
+# Vault token creation configuration
+VAULT_ROOT_TOKEN = os.getenv("VAULT_ROOT_TOKEN")
+VAULT_TOKEN_POLICIES = os.getenv("VAULT_TOKEN_POLICIES", "boundary-controller").split(",")
+VAULT_TOKEN_PERIOD = os.getenv("VAULT_TOKEN_PERIOD", "24h")
+
+# Boundary configuration
+BOUNDARY_ADDR = os.getenv("BOUNDARY_ADDR")
+BOUNDARY_TOKEN = os.getenv("BOUNDARY_TOKEN")
+
 # Authorization middleware configuration
 VAULT_AUTH_PATH = os.getenv("VAULT_AUTH_PATH")
 EXCLUDED_PATHS = ["/health", "/auth/login", "/auth/callback", "/docs", "/openapi.json"]
