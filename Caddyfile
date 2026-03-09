@@ -1,5 +1,9 @@
-gateway.local:443 {
-    #tls ./certs/echo.pem ./certs/echo-key.pem
-    #reverse_proxy localhost 8000
-    respond "Proxy disabled for testing"
+gateway.local {
+    tls ./certs/echo-fullchain.pem ./certs/echo-key.pem {
+        client_auth {
+            mode require_and_verify
+            trusted_ca_cert_file ./certs/issuing_ca.pem
+        }
+    }
+    reverse_proxy 127.0.0.1:8000
 }
