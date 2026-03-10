@@ -27,6 +27,9 @@ BOUNDARY_TOKEN = os.getenv("BOUNDARY_TOKEN")
 VAULT_AUTH_PATH = os.getenv("VAULT_AUTH_PATH")
 EXCLUDED_PATHS = ["/health", "/auth/login", "/auth/callback", "/docs", "/openapi.json"]
 
+# Logging configuration
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
 # In-memory storage for tokens
 token_storage = {
     "access_token": None,

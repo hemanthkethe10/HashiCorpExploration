@@ -15,15 +15,18 @@ from config import (
     REDIRECT_URI,
     token_storage
 )
-from middleware import AuthorizationMiddleware
+from middleware import AuthorizationMiddleware, RequestLoggingMiddleware
+from logger import logger, log_json
 
-app = FastAPI(title="Vault OIDC Server")
+app = FastAPI(title="FAST API Server For HashiCorp")
 app.add_middleware(AuthorizationMiddleware)
+app.add_middleware(RequestLoggingMiddleware)
 
 
 @app.get("/health")
 async def health():
     """Health check endpoint"""
+    log_json(logger, "info", "Health check called", method="GET", data="")
     return {"status": "ok"}
 
 
@@ -33,6 +36,8 @@ async def initiate_oidc_login():
     Initiate OIDC login flow.
     Returns the authorization URL to redirect users to Vault.
     """
+    log_json(logger, "info", "Initiating OIDC login flow", method="GET", data="")
+    
     namespace_path = f"{VAULT_NAMESPACE}/" if VAULT_NAMESPACE else ""
     auth_url = f"{VAULT_ADDR}/ui/vault/{namespace_path}identity/oidc/provider/{PROVIDER_NAME}/authorize"
     
@@ -47,6 +52,8 @@ async def initiate_oidc_login():
     param_string = "&".join([f"{k}={v}" for k, v in params.items()])
     full_auth_url = f"{auth_url}?{param_string}"
 
+    log_json(logger, "info", "OIDC authorization URL generated", method="GET", data={"provider": PROVIDER_NAME})
+    
     return JSONResponse(
         content={
             "message": "Redirect user to this URL to start OIDC flow",
@@ -62,10 +69,14 @@ async def oidc_callback(code: Optional[str] = None, state: Optional[str] = None,
     Exchanges authorization code for tokens and stores them in memory.
     """
     if error:
+        log_json(logger, "error", f"OIDC callback error: {error}", method="GET", data={"error": error})
         raise HTTPException(status_code=400, detail=f"OIDC error: {error}")
     
     if not code:
+        log_json(logger, "error", "Authorization code not provided", method="GET", data="")
         raise HTTPException(status_code=400, detail="Authorization code not provided")
+    
+    log_json(logger, "info", "Processing OIDC callback", method="GET", data={"state": state})
     
     namespace_path = f"v1/{VAULT_NAMESPACE}" if VAULT_NAMESPACE else "v1"
     token_url = f"{VAULT_ADDR}/{namespace_path}/identity/oidc/provider/{PROVIDER_NAME}/token"
@@ -76,6 +87,8 @@ async def oidc_callback(code: Optional[str] = None, state: Optional[str] = None,
             auth_string = f"{CLIENT_ID}:{CLIENT_SECRET}"
             auth_bytes = auth_string.encode('utf-8')
             auth_b64 = base64.b64encode(auth_bytes).decode('utf-8')
+            
+            log_json(logger, "info", "Exchanging authorization code for tokens", method="POST", data={"token_url": token_url})
             
             # Exchange code for tokens
             token_response = await client.post(
@@ -92,13 +105,14 @@ async def oidc_callback(code: Optional[str] = None, state: Optional[str] = None,
             )
             
             if token_response.status_code != 200:
+                log_json(logger, "error", "Token exchange failed", method="POST", data={"status_code": token_response.status_code, "response": token_response.text})
                 raise HTTPException(
                     status_code=token_response.status_code,
                     detail=f"Token exchange failed: {token_response.text}"
                 )
             
             token_data = token_response.json()
-            print("token_data",token_data)
+            log_json(logger, "info", "Token exchange successful", method="POST", data={"token_type": token_data.get("token_type")})
             
             # Store tokens in memory
             token_storage["access_token"] = token_data.get("access_token")
@@ -110,8 +124,9 @@ async def oidc_callback(code: Optional[str] = None, state: Optional[str] = None,
             
             # Fetch userinfo to test the access token
             userinfo = await fetch_userinfo(token_storage["access_token"])
-            print("userinfo",userinfo)
             token_storage["userinfo"] = userinfo
+            
+            log_json(logger, "info", "OIDC authentication completed successfully", method="GET", data={"expires_in": token_storage["expires_in"]})
             
             return JSONResponse(
                 status_code=200,
@@ -125,8 +140,10 @@ async def oidc_callback(code: Optional[str] = None, state: Optional[str] = None,
             )
             
         except httpx.RequestError as e:
+            log_json(logger, "error", "Request failed during token exchange", method="POST", data={"error": str(e)})
             raise HTTPException(status_code=500, detail=f"Request failed: {str(e)}")
         except Exception as e:
+            log_json(logger, "error", "Unexpected error during OIDC callback", method="GET", data={"error": str(e)})
             raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 
@@ -230,6 +247,8 @@ async def fetch_userinfo(access_token: str):
     Fetch user information using the access token.
     The access token is a Vault batch token that provides read access to the userinfo endpoint.
     """
+    log_json(logger, "info", "Fetching userinfo", method="GET", data="")
+    
     namespace_path = f"v1/{VAULT_NAMESPACE}" if VAULT_NAMESPACE else "v1"
     userinfo_url = f"{VAULT_ADDR}/{namespace_path}/identity/oidc/provider/{PROVIDER_NAME}/userinfo"
     
@@ -242,11 +261,13 @@ async def fetch_userinfo(access_token: str):
         )
         
         if response.status_code != 200:
+            log_json(logger, "error", "Failed to fetch userinfo", method="GET", data={"status_code": response.status_code, "response": response.text})
             return {
                 "error": f"Failed to fetch userinfo: {response.status_code}",
                 "details": response.text
             }
         
+        log_json(logger, "info", "Userinfo fetched successfully", method="GET", data="")
         return response.json()
 
 
