@@ -5,6 +5,7 @@ from typing import Optional
 from datetime import datetime
 import base64
 import json
+import boto3
 
 from config import (
     VAULT_ADDR,
@@ -13,6 +14,9 @@ from config import (
     CLIENT_ID,
     CLIENT_SECRET,
     REDIRECT_URI,
+    AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY,
+    AWS_REGION,
     token_storage
 )
 from middleware import AuthorizationMiddleware, RequestLoggingMiddleware
@@ -493,3 +497,61 @@ async def list_secrets(path: str = "secret/metadata", vault_token: Optional[str]
             
         except httpx.RequestError as e:
             raise HTTPException(status_code=500, detail=f"Request failed: {str(e)}")
+
+
+@app.post("/aws/assume-role")
+async def assume_role_endpoint(role_arn: str, session_name: str = "HashiCorpSession"):
+    """
+    Assume an AWS IAM role and return temporary credentials.
+    """
+    log_json(logger, "info", "Assuming AWS role", method="POST", data={"role_arn": role_arn, "session_name": session_name})
+    
+    if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
+        log_json(logger, "error", "AWS credentials not configured", method="POST", data="")
+        raise HTTPException(
+            status_code=500,
+            detail="AWS credentials not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in environment."
+        )
+    
+    try:
+        sts_client = boto3.client(
+            "sts",
+            region_name=AWS_REGION,
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        )
+        
+        params = {
+            "RoleArn": role_arn,
+            "RoleSessionName": session_name,
+        }
+        
+        response = sts_client.assume_role(**params)
+        log_json(logger, "info", "AWS role assumed successfully", method="POST", data={"role_arn": role_arn})
+        
+        # Extract credentials from response
+        credentials = response.get("Credentials", {})
+        assumed_role_user = response.get("AssumedRoleUser", {})
+        
+        return JSONResponse(
+            content={
+                "message": "Role assumed successfully",
+                "credentials": {
+                    "AccessKeyId": credentials.get("AccessKeyId"),
+                    "SecretAccessKey": credentials.get("SecretAccessKey"),
+                    "SessionToken": credentials.get("SessionToken"),
+                    "Expiration": credentials.get("Expiration").isoformat() if credentials.get("Expiration") else None
+                },
+                "assumed_role_user": {
+                    "Arn": assumed_role_user.get("Arn"),
+                    "AssumedRoleId": assumed_role_user.get("AssumedRoleId")
+                }
+            }
+        )
+        
+    except Exception as error:
+        log_json(logger, "error", "Error assuming AWS role", method="POST", data={"error": str(error)})
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to assume role: {str(error)}"
+        )

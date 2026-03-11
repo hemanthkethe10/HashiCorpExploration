@@ -25,10 +25,15 @@ BOUNDARY_TOKEN = os.getenv("BOUNDARY_TOKEN")
 
 # Authorization middleware configuration
 VAULT_AUTH_PATH = os.getenv("VAULT_AUTH_PATH")
-EXCLUDED_PATHS = ["/health", "/auth/login", "/auth/callback", "/docs", "/openapi.json"]
+EXCLUDED_PATHS = ["/health", "/auth/login", "/auth/callback", "/docs", "/openapi.json", "/aws/assume-role"]
 
 # Logging configuration
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# AWS configuration
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 
 # In-memory storage for tokens
 token_storage = {

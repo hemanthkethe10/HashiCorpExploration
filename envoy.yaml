@@ -48,6 +48,7 @@ static_resources:
             validation_context:
               trusted_ca:
                 filename: "./certs/issuing_ca.pem"
+              allow_expired_certificate: false
 
   clusters:
   - name: backend_service
