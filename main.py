@@ -6,6 +6,9 @@ from datetime import datetime
 import base64
 import json
 import boto3
+import asyncio
+import subprocess
+from pydantic import BaseModel
 
 from config import (
     VAULT_ADDR,
@@ -555,3 +558,103 @@ async def assume_role_endpoint(role_arn: str, session_name: str = "HashiCorpSess
             status_code=500,
             detail=f"Failed to assume role: {str(error)}"
         )
+
+
+class BoundaryConnectRequest(BaseModel):
+    boundary_addr: str = "http://localhost:9200"
+    auth_method_id: str
+    target_id: str
+    login_name: str
+    password: str
+
+
+@app.post("/boundary/connect")
+async def boundary_connect(req: BoundaryConnectRequest):
+    """
+    Authenticate with Boundary, authorize a session for the given target,
+    spawn 'boundary connect', and return the local proxy IP and port.
+    """
+    log_json(logger, "info", "Starting Boundary session", method="POST", data={"target_id": req.target_id})
+
+    async with httpx.AsyncClient() as client:
+        # Step 1: Authenticate
+        try:
+            auth_res = await client.post(
+                f"{req.boundary_addr}/v1/auth-methods/{req.auth_method_id}:authenticate",
+                json={
+                    "type": "token",
+                    "attributes": {
+                        "login_name": req.login_name,
+                        "password": req.password
+                    }
+                }
+            )
+            auth_res.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            log_json(logger, "error", "Boundary authentication failed", method="POST", data={"error": str(e)})
+            raise HTTPException(status_code=401, detail=f"Boundary authentication failed: {e.response.text}")
+
+        session_token = auth_res.json().get("attributes", {}).get("token")
+        if not session_token:
+            raise HTTPException(status_code=500, detail="No token returned from Boundary auth")
+
+        # Step 2: Authorize target session
+        try:
+            target_res = await client.post(
+                f"{req.boundary_addr}/v1/targets/{req.target_id}:authorize-session",
+                json={},
+                headers={"Authorization": f"Bearer {session_token}"}
+            )
+            target_res.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            log_json(logger, "error", "Boundary target authorization failed", method="POST", data={"error": str(e)})
+            raise HTTPException(status_code=403, detail=f"Target authorization failed: {e.response.text}")
+
+        authz_token = target_res.json().get("authorization_token")
+        if not authz_token:
+            raise HTTPException(status_code=500, detail="No authorization_token returned from Boundary")
+
+    # Step 3: Spawn 'boundary connect' and parse the port from stdout
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "boundary", "connect",
+            "-authz-token", authz_token,
+            "-listen-port", "0",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="'boundary' CLI not found. Ensure it is installed and in PATH.")
+
+    local_port = None
+    # Read stdout lines until we find the port
+    try:
+        async def read_port(timeout: float = 15.0):
+            deadline = asyncio.get_event_loop().time() + timeout
+            while asyncio.get_event_loop().time() < deadline:
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=2.0)
+                if not line:
+                    break
+                text = line.decode()
+                import re
+                match = re.search(r"Port:\s+(\d+)", text)
+                if match:
+                    return match.group(1)
+            return None
+
+        local_port = await read_port()
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise HTTPException(status_code=504, detail="Timed out waiting for boundary connect to report port")
+
+    if not local_port:
+        stderr_output = await proc.stderr.read()
+        proc.kill()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not parse port from boundary connect output. stderr: {stderr_output.decode()}"
+        )
+
+    log_json(logger, "info", "Boundary proxy ready", method="POST", data={"ip": "127.0.0.1", "port": local_port})
+
+    return JSONResponse(content={"ip": "127.0.0.1", "port": int(local_port)})
