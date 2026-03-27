@@ -85,3 +85,19 @@ class SyncRecordRepository:
                 sync_type=sync_type,
                 resource_type=resource_type,
             )
+
+    def get_all_sync_records(self) -> list[SyncRecord]:
+        """Return every SyncRecord row in the database."""
+        return self._session.query(SyncRecord).all()
+
+    def delete_sync_record(self, record: SyncRecord) -> None:
+        """Delete a single SyncRecord row. Errors are logged and swallowed."""
+        try:
+            self._session.delete(record)
+            self._session.commit()
+        except Exception:
+            logger.error(
+                "Failed to delete SyncRecord id=%s lumen_id=%s",
+                record.id, record.lumen_id,
+            )
+            self._session.rollback()

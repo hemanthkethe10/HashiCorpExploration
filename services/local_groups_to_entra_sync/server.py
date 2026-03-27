@@ -22,9 +22,11 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
+from .agent_identity_service import AgentIdentityService
 from .app_registration_service import AppRegistrationService
 from .entra_group_service import EntraGroupService
 from .exceptions import AuthenticationError
@@ -79,6 +81,7 @@ def _build_orchestrator() -> SyncOrchestrator:
     client_id = _require_env("CLIENT_ID")
     client_secret = _require_env("CLIENT_SECRET")
     graph_scope = _require_env("GRAPH_SCOPE")
+    blueprint_principal_id = _require_env("AGENT_BLUEPRINT_PRINCIPAL_ID")
 
     session = _get_session()
     token_provider = TokenProvider(tenant_id, client_id, client_secret, graph_scope)
@@ -86,6 +89,7 @@ def _build_orchestrator() -> SyncOrchestrator:
     sync_record_repo = SyncRecordRepository(session)
     entra_group_svc = EntraGroupService(token_provider)
     app_reg_svc = AppRegistrationService(token_provider)
+    agent_identity_svc = AgentIdentityService(token_provider, blueprint_principal_id)
 
     return SyncOrchestrator(
         token_provider,
@@ -93,6 +97,7 @@ def _build_orchestrator() -> SyncOrchestrator:
         sync_record_repo,
         entra_group_svc,
         app_reg_svc,
+        agent_identity_svc,
     )
 
 
@@ -184,6 +189,138 @@ def seed_database() -> dict:
         raise HTTPException(status_code=500, detail=f"Seed failed: {exc}")
     finally:
         session.close()
+
+
+class AddMemberRequest(BaseModel):
+    group_id: str
+    member_id: str
+
+
+@app.post("/test/agent-identity", summary="[TEST] Create a single agent identity")
+def test_create_agent_identity(display_name: str) -> dict:
+    """Create one agent identity and return its ms_object_id.
+
+    Useful for validating the blueprint principal config and payload
+    before running a full sync.
+
+    Query param:
+        display_name: the displayName for the new agent identity
+    """
+    try:
+        token_provider = TokenProvider(
+            _require_env("TENANT_ID"),
+            _require_env("CLIENT_ID"),
+            _require_env("CLIENT_SECRET"),
+            _require_env("GRAPH_SCOPE"),
+        )
+        blueprint_principal_id = _require_env("AGENT_BLUEPRINT_PRINCIPAL_ID")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    svc = AgentIdentityService(token_provider, blueprint_principal_id)
+    try:
+        ms_object_id = svc.create_agent_identity(display_name)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"ms_object_id": ms_object_id, "display_name": display_name}
+
+
+@app.post("/test/add-member", summary="[TEST] Add a member to a security group")
+def test_add_member(body: AddMemberRequest) -> dict:
+    """Add an existing directory object (agent identity, app registration, etc.)
+    to a security group by providing both object IDs directly.
+
+    Body:
+        group_id:  ms_object_id of the target security group
+        member_id: ms_object_id of the directory object to add
+    """
+    try:
+        token_provider = TokenProvider(
+            _require_env("TENANT_ID"),
+            _require_env("CLIENT_ID"),
+            _require_env("CLIENT_SECRET"),
+            _require_env("GRAPH_SCOPE"),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    svc = EntraGroupService(token_provider)
+    try:
+        svc.add_group_member(body.group_id, body.member_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return {"status": "added", "group_id": body.group_id, "member_id": body.member_id}
+
+
+@app.delete("/cleanup", summary="Delete all synced Entra resources and clear SyncRecords")
+def cleanup() -> dict:
+    """Delete every Entra resource that was created by a previous sync run.
+
+    For each SyncRecord in the local DB:
+    - security_group    → DELETE /v1.0/groups/{id}
+    - app_registration  → DELETE /v1.0/applications/{id}
+    - agent_identity    → DELETE /beta/servicePrincipals/{id}
+
+    The SyncRecord row is removed from the DB after a successful (or 404) deletion,
+    so the next call to /sync will treat all entities as new.
+
+    Individual failures are collected and reported; they do not abort the cleanup.
+    """
+    try:
+        token_provider = TokenProvider(
+            _require_env("TENANT_ID"),
+            _require_env("CLIENT_ID"),
+            _require_env("CLIENT_SECRET"),
+            _require_env("GRAPH_SCOPE"),
+        )
+        blueprint_principal_id = _require_env("AGENT_BLUEPRINT_PRINCIPAL_ID")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    entra_group_svc = EntraGroupService(token_provider)
+    app_reg_svc = AppRegistrationService(token_provider)
+    agent_identity_svc = AgentIdentityService(token_provider, blueprint_principal_id)
+
+    try:
+        session = _get_session()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    sync_record_repo = SyncRecordRepository(session)
+    records = sync_record_repo.get_all_sync_records()
+
+    deleted, failed, errors = 0, 0, []
+
+    for record in records:
+        ms_id = record.ms_object_id
+        rtype = record.resource_type
+        try:
+            if rtype == "security_group":
+                entra_group_svc.delete_security_group(ms_id)
+            elif rtype == "app_registration":
+                app_reg_svc.delete_app_registration(ms_id)
+            elif rtype == "agent_identity":
+                agent_identity_svc.delete_agent_identity(ms_id)
+            elif rtype == "service_principal":
+                app_reg_svc.delete_service_principal(ms_id)
+            else:
+                logger.warning("Unknown resource_type=%s for SyncRecord id=%s — skipping", rtype, record.id)
+                continue
+
+            sync_record_repo.delete_sync_record(record)
+            deleted += 1
+            logger.info("Cleaned up %s ms_object_id=%s lumen_id=%s", rtype, ms_id, record.lumen_id)
+
+        except Exception as exc:
+            failed += 1
+            msg = f"{rtype} ms_object_id={ms_id} lumen_id={record.lumen_id}: {exc}"
+            errors.append(msg)
+            logger.error("Cleanup failed for %s", msg)
+
+    session.close()
+    return {"deleted": deleted, "failed": failed, "errors": errors}
 
 
 @app.get("/health", summary="Health check")
