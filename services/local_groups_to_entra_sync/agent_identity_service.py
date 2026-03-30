@@ -4,7 +4,7 @@ import logging
 
 import requests
 
-from .config import GRAPH_BETA_URL, GRAPH_V1_URL, SPONSOR_USER_ID
+from .config import GRAPH_BETA_URL, GRAPH_V1_URL, SPONSOR_USER_ID,LumenResourceType
 from .token_provider import TokenProvider
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ class AgentIdentityService:
         token = self._token_provider.get_token()
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    def create_agent_identity(self, display_name: str) -> str:
+    def create_agent_identity(self, display_name: str, resource_id: str) -> str:
         """Create a new agent identity service principal.
 
         Returns:
@@ -33,16 +33,16 @@ class AgentIdentityService:
         """
         headers = self._auth_headers()
         logger.info(
-            "Creating agent identity: display_name=%s blueprint_principal_id=%s",
-            display_name, self._blueprint_principal_id,
+            "Creating agent identity: display_name=%s blueprint_principal_id=%s resource_id=%s",
+            display_name, self._blueprint_principal_id, resource_id,
         )
-
         response = requests.post(
             f"{GRAPH_BETA_URL}/servicePrincipals/microsoft.graph.agentIdentity",
             json={
                 "displayName": display_name,
                 "agentIdentityBlueprintId": self._blueprint_principal_id,
                 "sponsors@odata.bind": [f"{GRAPH_V1_URL}/users/{SPONSOR_USER_ID}"],
+                "tags": [f"resourceType:{LumenResourceType.AGENT.value}", f"resourceId:{resource_id}"],
             },
             headers=headers,
         )
@@ -73,13 +73,16 @@ class AgentIdentityService:
         logger.debug("Fetched agent identity: ms_object_id=%s displayName=%s", ms_object_id, data.get("displayName"))
         return data
 
-    def update_agent_identity(self, ms_object_id: str, display_name: str) -> None:
-        """Update the display name of an existing agent identity."""
+    def update_agent_identity(self, ms_object_id: str, display_name: str, resource_id: str) -> None:
+        """Update the display name and resource tags of an existing agent identity."""
         logger.info("Updating agent identity: ms_object_id=%s new_display_name=%s", ms_object_id, display_name)
         headers = self._auth_headers()
         response = requests.patch(
             f"{GRAPH_BETA_URL}/servicePrincipals/{ms_object_id}",
-            json={"displayName": display_name},
+            json={
+                "displayName": display_name,
+                "tags": [F"resourceType:{LumenResourceType.AGENT.value}", f"resourceId:{resource_id}"],
+            },
             headers=headers,
         )
         logger.debug("PATCH /beta/servicePrincipals/%s status=%d", ms_object_id, response.status_code)

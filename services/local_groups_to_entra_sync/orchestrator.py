@@ -9,6 +9,7 @@ from .config import (
     RESOURCE_SECURITY_GROUP,
     RESOURCE_SERVICE_PRINCIPAL,
     SYNC_TYPE,
+    LumenResourceType,
 )
 from .entra_group_service import EntraGroupService
 from .repositories import GroupRepository, SyncRecordRepository
@@ -115,7 +116,7 @@ class SyncOrchestrator:
             # Step 6: Clients → App Registrations
             for client in clients:
                 try:
-                    ms_id = self._sync_app_registration(client.id, client.name, summary)
+                    ms_id = self._sync_app_registration(client.id, client.name, LumenResourceType.CLIENT.value, summary)
                     if ms_id:
                         member_ms_ids.append(ms_id)
                 except Exception as exc:
@@ -129,7 +130,7 @@ class SyncOrchestrator:
             # Step 7: MCP Servers → App Registrations
             for mcp in mcp_servers:
                 try:
-                    ms_id = self._sync_app_registration(mcp.id, mcp.name, summary)
+                    ms_id = self._sync_app_registration(mcp.id, mcp.name, LumenResourceType.MCP_SERVER.value, summary)
                     if ms_id:
                         member_ms_ids.append(ms_id)
                 except Exception as exc:
@@ -206,7 +207,7 @@ class SyncOrchestrator:
         record = self._sync_record_repo.get_sync_record(lumen_id, SYNC_TYPE, RESOURCE_AGENT_IDENTITY)
 
         if record is None:
-            ms_object_id = self._agent_identity_svc.create_agent_identity(name)
+            ms_object_id = self._agent_identity_svc.create_agent_identity(name, lumen_id)
             self._sync_record_repo.upsert_sync_record(lumen_id, ms_object_id, SYNC_TYPE, RESOURCE_AGENT_IDENTITY)
             logger.info("Created agent identity: lumen_id=%s ms_object_id=%s", lumen_id, ms_object_id)
             summary.created += 1
@@ -216,13 +217,13 @@ class SyncOrchestrator:
         existing = self._agent_identity_svc.get_agent_identity(ms_object_id)
 
         if existing is None:
-            ms_object_id = self._agent_identity_svc.create_agent_identity(name)
+            ms_object_id = self._agent_identity_svc.create_agent_identity(name, lumen_id)
             self._sync_record_repo.upsert_sync_record(lumen_id, ms_object_id, SYNC_TYPE, RESOURCE_AGENT_IDENTITY)
             logger.info("Re-created agent identity (was 404): lumen_id=%s ms_object_id=%s", lumen_id, ms_object_id)
             summary.created += 1
         elif existing.get("displayName") != name:
             old_name = existing.get("displayName")
-            self._agent_identity_svc.update_agent_identity(ms_object_id, name)
+            self._agent_identity_svc.update_agent_identity(ms_object_id, name, lumen_id)
             logger.info("Updated agent identity: lumen_id=%s old_name=%s new_name=%s", lumen_id, old_name, name)
             summary.updated += 1
         else:
@@ -230,17 +231,17 @@ class SyncOrchestrator:
 
         return ms_object_id
 
-    def _sync_app_registration(self, lumen_id: str, name: str, summary: SyncSummary) -> str | None:
+    def _sync_app_registration(self, lumen_id: str, name: str, resource_type: str, summary: SyncSummary) -> str | None:
         """Create or update an Entra App Registration and its Service Principal.
 
         Returns the Service Principal object ID (used for group membership).
         """
         # --- App Registration ---
         app_record = self._sync_record_repo.get_sync_record(lumen_id, SYNC_TYPE, RESOURCE_APP_REGISTRATION)
-        app_id: str | None = None  # the appId (client ID), needed to create the SP
+        app_id: str | None = None
 
         if app_record is None:
-            ms_object_id, app_id = self._app_reg_svc.create_app_registration(name)
+            ms_object_id, app_id = self._app_reg_svc.create_app_registration(name, resource_type, lumen_id)
             self._sync_record_repo.upsert_sync_record(lumen_id, ms_object_id, SYNC_TYPE, RESOURCE_APP_REGISTRATION)
             logger.info("Created app registration: lumen_id=%s ms_object_id=%s app_id=%s", lumen_id, ms_object_id, app_id)
             summary.created += 1
@@ -249,7 +250,7 @@ class SyncOrchestrator:
             existing = self._app_reg_svc.get_app_registration(ms_object_id)
 
             if existing is None:
-                ms_object_id, app_id = self._app_reg_svc.create_app_registration(name)
+                ms_object_id, app_id = self._app_reg_svc.create_app_registration(name, resource_type, lumen_id)
                 self._sync_record_repo.upsert_sync_record(lumen_id, ms_object_id, SYNC_TYPE, RESOURCE_APP_REGISTRATION)
                 logger.info("Re-created app registration (was 404): lumen_id=%s ms_object_id=%s", lumen_id, ms_object_id)
                 summary.created += 1
@@ -257,7 +258,7 @@ class SyncOrchestrator:
                 app_id = existing.get("appId")
                 if existing.get("displayName") != name:
                     old_name = existing.get("displayName")
-                    self._app_reg_svc.update_app_registration(ms_object_id, name)
+                    self._app_reg_svc.update_app_registration(ms_object_id, name, resource_type, lumen_id)
                     logger.info("Updated app registration: lumen_id=%s old_name=%s new_name=%s", lumen_id, old_name, name)
                     summary.updated += 1
                 else:
