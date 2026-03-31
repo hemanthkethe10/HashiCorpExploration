@@ -18,7 +18,7 @@ class AppRegistrationService:
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
-    def create_app_registration(self, display_name: str, resource_type: str, resource_id: str) -> tuple[str, str]:
+    def create_app_registration(self, display_name: str, resource_type: str, resource_id: str, extra_tags: dict | None = None) -> tuple[str, str]:
         """Create an app registration with Lumen resource tags.
 
         Returns:
@@ -27,12 +27,12 @@ class AppRegistrationService:
         logger.info("Creating app registration: display_name=%s resource_type=%s resource_id=%s",
                     display_name, resource_type, resource_id)
         headers = self._auth_headers()
+        tags = [f"resourceType:{resource_type}", f"resourceId:{resource_id}"]
+        for k, v in (extra_tags or {}).items():
+            tags.append(f"{k}:{v}")
         response = requests.post(
             f"{GRAPH_V1_URL}/applications",
-            json={
-                "displayName": display_name,
-                "tags": [f"resourceType:{resource_type}", f"resourceId:{resource_id}"],
-            },
+            json={"displayName": display_name, "tags": tags},
             headers=headers,
         )
         logger.debug("POST /applications status=%d", response.status_code)
@@ -58,16 +58,16 @@ class AppRegistrationService:
         response.raise_for_status()
         return response.json()
 
-    def update_app_registration(self, ms_object_id: str, display_name: str, resource_type: str, resource_id: str) -> None:
+    def update_app_registration(self, ms_object_id: str, display_name: str, resource_type: str, resource_id: str, extra_tags: dict | None = None) -> None:
         """Updates the display name and Lumen resource tags of an existing app registration."""
         logger.info("Updating app registration: ms_object_id=%s new_display_name=%s", ms_object_id, display_name)
         headers = self._auth_headers()
+        tags = [f"resourceType:{resource_type}", f"resourceId:{resource_id}"]
+        for k, v in (extra_tags or {}).items():
+            tags.append(f"{k}:{v}")
         response = requests.patch(
             f"{GRAPH_V1_URL}/applications/{ms_object_id}",
-            json={
-                "displayName": display_name,
-                "tags": [f"resourceType:{resource_type}", f"resourceId:{resource_id}"],
-            },
+            json={"displayName": display_name, "tags": tags},
             headers=headers,
         )
         logger.debug("PATCH /applications/%s status=%d", ms_object_id, response.status_code)

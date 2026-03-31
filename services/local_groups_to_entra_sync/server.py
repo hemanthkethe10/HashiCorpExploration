@@ -50,6 +50,18 @@ app = FastAPI(
 )
 
 
+@app.on_event("startup")
+def create_sync_records_table() -> None:
+    """Create the sync_records table if it doesn't exist on application startup."""
+    try:
+        engine = _get_engine()
+        from .models import SyncRecord
+        SyncRecord.__table__.create(bind=engine, checkfirst=True)
+        logger.info("sync_records table ready")
+    except Exception as exc:
+        logger.error("Failed to create sync_records table: %s", exc, exc_info=True)
+
+
 def _require_env(name: str) -> str:
     value = os.environ.get(name)
     if not value:
@@ -143,16 +155,54 @@ def seed_database() -> dict:
     try:
         now = datetime.utcnow()
 
+        agent_id = f"poet.dev-lumen.xeninc.us-a2a-test-{uuid.uuid4().hex[:8]}"
+        client_id = f"client.{uuid.uuid4().hex[:8]}.example.com"
+        mcp_id = f"mcp_{uuid.uuid4().hex[:16]}"
+
         agents = [
-            Agent(id=f"agent_{uuid.uuid4().hex[:8]}", name="Agent Alpha"),
-            Agent(id=f"agent_{uuid.uuid4().hex[:8]}", name="Agent Beta"),
+            Agent(
+                id=agent_id,
+                afa_name="Test Agent",
+                afa_description="Seeded test agent",
+                agent_url=f"https://example.com/a2a/{agent_id}/",
+                agent_card=None,
+                registered_by="seed-endpoint",
+                agent_unique_ref=f"agent-{uuid.uuid4().hex[:12]}",
+                timeout_ms=600000,
+                enabled=False,
+                changes_detected=False,
+                is_deleted=False,
+                created_at=now,
+                updated_at=now,
+            ),
         ]
         clients = [
-            Client(id=f"client_{uuid.uuid4().hex[:8]}", name="Client Gamma"),
-            Client(id=f"client_{uuid.uuid4().hex[:8]}", name="Client Delta"),
+            Client(
+                id=client_id,
+                name="Test Client",
+                client_url=f"https://{client_id}/",
+                description="Seeded test client",
+                registered_by="seed-endpoint",
+                enabled=False,
+                is_deleted=False,
+                created_at=now,
+                updated_at=now,
+            ),
         ]
         mcp_servers = [
-            MCP_Server(id=f"mcp_{uuid.uuid4().hex[:8]}", name="MCP Server Epsilon"),
+            MCP_Server(
+                id=mcp_id,
+                name="Test MCP Server",
+                description="Seeded test MCP server",
+                mcp_url="https://example.com/api/mcp",
+                registered_by="seed-endpoint",
+                mcp_unique_ref=f"mcp-{uuid.uuid4().hex[:12]}",
+                enabled=False,
+                changes_detected=False,
+                is_deleted=False,
+                created_at=now,
+                updated_at=now,
+            ),
         ]
 
         for obj in agents + clients + mcp_servers:
@@ -162,13 +212,10 @@ def seed_database() -> dict:
             id=f"peer_group_{uuid.uuid4().hex[:16]}",
             name="Test Peer Group",
             description="Seeded test group",
-            members={
-                "agent_ids": [a.id for a in agents],
-                "client_ids": [c.id for c in clients],
-                "mcp_server_ids": [m.id for m in mcp_servers],
-            },
-            policy_ids=[],
+            members=f'{{"agent_ids": ["{agent_id}"], "client_ids": ["{client_id}"], "mcp_server_ids": ["{mcp_id}"]}}',
+            policy_ids="[]",
             registered_by="seed-endpoint",
+            is_deleted=False,
             created_at=now,
             updated_at=now,
         )
@@ -305,6 +352,8 @@ def cleanup() -> dict:
                 agent_identity_svc.delete_agent_identity(ms_id)
             elif rtype == "service_principal":
                 app_reg_svc.delete_service_principal(ms_id)
+            elif rtype == "agent_instance":
+                agent_identity_svc.delete_agent_instance(ms_id)
             else:
                 logger.warning("Unknown resource_type=%s for SyncRecord id=%s — skipping", rtype, record.id)
                 continue
@@ -321,6 +370,65 @@ def cleanup() -> dict:
 
     session.close()
     return {"deleted": deleted, "failed": failed, "errors": errors}
+
+
+class CreateAgentRegistryRequest(BaseModel):
+    display_name: str
+    agent_url: str
+    agent_card: dict
+    owner_ids: list[str] = []
+
+
+@app.post("/test/agent-registry", summary="[TEST] Create a single agent instance in the Entra Agent Registry")
+def test_create_agent_registry(body: CreateAgentRegistryRequest) -> dict:
+    """Create one agent identity + agent instance and return their IDs.
+
+    Useful for validating the agentCardManifest mapping and agent registry
+    creation flow without running a full sync.
+
+    Body:
+        display_name: display name for the agent identity and instance
+        agent_url:    the A2A endpoint URL for the agent
+        agent_card:   the raw local agent card dict (will be mapped to agentCardManifest)
+        owner_ids:    optional list of owner object IDs
+    """
+    try:
+        token_provider = TokenProvider(
+            _require_env("TENANT_ID"),
+            _require_env("CLIENT_ID"),
+            _require_env("CLIENT_SECRET"),
+            _require_env("GRAPH_SCOPE"),
+        )
+        blueprint_principal_id = _require_env("AGENT_BLUEPRINT_PRINCIPAL_ID")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    svc = AgentIdentityService(token_provider, blueprint_principal_id)
+
+    try:
+        agent_identity_id = svc.create_agent_identity(body.display_name, resource_id=uuid.uuid4().hex)
+    except Exception as exc:
+        logger.error("Failed to create agent identity: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Agent identity creation failed: {exc}")
+
+    try:
+        instance_id = svc.create_agent_instance(
+            display_name=body.display_name,
+            agent_url=body.agent_url,
+            agent_card=body.agent_card,
+            agent_identity_id=agent_identity_id,
+            owner_ids=body.owner_ids,
+            blueprint_id=blueprint_principal_id,
+        )
+    except Exception as exc:
+        logger.error("Failed to create agent instance: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Agent instance creation failed: {exc}")
+
+    return {
+        "agent_identity_id": agent_identity_id,
+        "agent_instance_id": instance_id,
+        "display_name": body.display_name,
+    }
 
 
 @app.get("/health", summary="Health check")

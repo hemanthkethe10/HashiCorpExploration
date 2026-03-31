@@ -6,6 +6,7 @@ import requests
 
 from .config import GRAPH_BETA_URL, GRAPH_V1_URL, SPONSOR_USER_ID, LumenResourceType
 from .token_provider import TokenProvider
+from services.local_groups_to_entra_sync.utils.agent_card_mapper import map_local_agent_card_to_entra_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -118,16 +119,12 @@ class AgentIdentityService:
         payload: dict = {
             "displayName": display_name,
             "url": agent_url,
-            "ownerIds": owner_ids,
             "agentIdentityBlueprintId": blueprint_id,
             "agentIdentityId": agent_identity_id,
         }
-        if agent_card:
-            payload["agentCardManifest"] = agent_card
 
         logger.info(
-            "Creating agentInstance: display_name=%s agent_identity_id=%s",
-            display_name, agent_identity_id,
+            "Creating agentInstance with payload : %s", payload
         )
         response = requests.post(
             f"{GRAPH_BETA_URL}/agentRegistry/agentInstances",
@@ -156,3 +153,17 @@ class AgentIdentityService:
             return None
         response.raise_for_status()
         return response.json()
+
+    def delete_agent_instance(self, instance_id: str) -> None:
+        """Delete an agentInstance. Silently ignores 404 (already gone)."""
+        logger.info("Deleting agentInstance: id=%s", instance_id)
+        headers = self._auth_headers()
+        response = requests.delete(
+            f"{GRAPH_BETA_URL}/agentRegistry/agentInstances/{instance_id}",
+            headers=headers,
+        )
+        if response.status_code == 404:
+            logger.warning("AgentInstance already gone (404): id=%s", instance_id)
+            return
+        response.raise_for_status()
+        logger.info("AgentInstance deleted: id=%s", instance_id)

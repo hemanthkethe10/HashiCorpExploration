@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from .agent_identity_service import AgentIdentityService
 from .app_registration_service import AppRegistrationService
 from .config import (
-    AGENT_BLUEPRINT_ID,
+    get_agent_blueprint_id,
     AGENT_INSTANCE_OWNER_IDS,
     RESOURCE_AGENT_IDENTITY,
     RESOURCE_AGENT_INSTANCE,
@@ -69,7 +69,7 @@ class SyncOrchestrator:
 
             # Step 3: Create/update the Entra security group for this peer group
             try:
-                group_ms_id = self._sync_security_group(group.id, group.name, summary)
+                group_ms_id = self._sync_security_group(group.id, group.name, group.description , summary)
             except Exception as exc:
                 logger.error(
                     "Failed to sync security group for lumen_id=%s name=%s: %s",
@@ -128,7 +128,7 @@ class SyncOrchestrator:
             # Step 6: Clients → App Registrations
             for client in clients:
                 try:
-                    ms_id = self._sync_app_registration(client.id, client.name, LumenResourceType.CLIENT.value, summary)
+                    ms_id = self._sync_app_registration(client, LumenResourceType.CLIENT.value, summary)
                     if ms_id:
                         member_ms_ids.append(ms_id)
                 except Exception as exc:
@@ -142,7 +142,7 @@ class SyncOrchestrator:
             # Step 7: MCP Servers → App Registrations
             for mcp in mcp_servers:
                 try:
-                    ms_id = self._sync_app_registration(mcp.id, mcp.name, LumenResourceType.MCP_SERVER.value, summary)
+                    ms_id = self._sync_app_registration(mcp, LumenResourceType.MCP_SERVER.value, summary)
                     if ms_id:
                         member_ms_ids.append(ms_id)
                 except Exception as exc:
@@ -185,12 +185,12 @@ class SyncOrchestrator:
     # Private helpers                                                      #
     # ------------------------------------------------------------------ #
 
-    def _sync_security_group(self, lumen_id: str, name: str, summary: SyncSummary) -> str | None:
+    def _sync_security_group(self, lumen_id: str, name: str, description: str, summary: SyncSummary) -> str | None:
         """Create or update an Entra security group. Returns the ms_object_id."""
         record = self._sync_record_repo.get_sync_record(lumen_id, SYNC_TYPE, RESOURCE_SECURITY_GROUP)
 
         if record is None:
-            ms_object_id = self._entra_group_svc.create_security_group(name, lumen_id)
+            ms_object_id = self._entra_group_svc.create_security_group(name, description, lumen_id)
             self._sync_record_repo.upsert_sync_record(lumen_id, ms_object_id, SYNC_TYPE, RESOURCE_SECURITY_GROUP)
             logger.info("Created security group: lumen_id=%s ms_object_id=%s", lumen_id, ms_object_id)
             summary.created += 1
@@ -200,7 +200,7 @@ class SyncOrchestrator:
         existing = self._entra_group_svc.get_security_group(ms_object_id)
 
         if existing is None:
-            ms_object_id = self._entra_group_svc.create_security_group(name, lumen_id)
+            ms_object_id = self._entra_group_svc.create_security_group(name, description, lumen_id)
             self._sync_record_repo.upsert_sync_record(lumen_id, ms_object_id, SYNC_TYPE, RESOURCE_SECURITY_GROUP)
             logger.info("Re-created security group (was 404): lumen_id=%s ms_object_id=%s", lumen_id, ms_object_id)
             summary.created += 1
@@ -224,13 +224,7 @@ class SyncOrchestrator:
         name = agent.afa_name
         agent_url = agent.agent_url or ""
 
-        # Parse agent_card — stored as a JSON string in the DB
-        agent_card: dict = {}
-        if agent.agent_card:
-            try:
-                agent_card = json.loads(agent.agent_card)
-            except Exception:
-                logger.warning("Could not parse agent_card for lumen_id=%s — sending empty manifest", lumen_id)
+        agent_card = agent.agent_card
 
         # --- Agent Identity ---
         record = self._sync_record_repo.get_sync_record(lumen_id, SYNC_TYPE, RESOURCE_AGENT_IDENTITY)
@@ -267,7 +261,7 @@ class SyncOrchestrator:
                 agent_card=agent_card,
                 agent_identity_id=ms_object_id,
                 owner_ids=AGENT_INSTANCE_OWNER_IDS,
-                blueprint_id=AGENT_BLUEPRINT_ID,
+                blueprint_id=get_agent_blueprint_id(),
             )
             self._sync_record_repo.upsert_sync_record(lumen_id, instance_id, SYNC_TYPE, RESOURCE_AGENT_INSTANCE)
             logger.info("Created agentInstance: lumen_id=%s instance_id=%s", lumen_id, instance_id)
@@ -281,7 +275,7 @@ class SyncOrchestrator:
                     agent_card=agent_card,
                     agent_identity_id=ms_object_id,
                     owner_ids=AGENT_INSTANCE_OWNER_IDS,
-                    blueprint_id=AGENT_BLUEPRINT_ID,
+                    blueprint_id=get_agent_blueprint_id(),
                 )
                 self._sync_record_repo.upsert_sync_record(lumen_id, instance_id, SYNC_TYPE, RESOURCE_AGENT_INSTANCE)
                 logger.info("Re-created agentInstance (was 404): lumen_id=%s instance_id=%s", lumen_id, instance_id)
@@ -291,17 +285,38 @@ class SyncOrchestrator:
 
         return ms_object_id
 
-    def _sync_app_registration(self, lumen_id: str, name: str, resource_type: str, summary: SyncSummary) -> str | None:
+    def _sync_app_registration(self, entity, resource_type: str, summary: SyncSummary) -> str | None:
         """Create or update an Entra App Registration and its Service Principal.
 
+        Builds entity-specific camelCase tags from the entity's fields.
         Returns the Service Principal object ID (used for group membership).
         """
+        from .models import Client, MCP_Server
+
+        lumen_id = entity.id
+        name = entity.name
+
+        # Build camelCase extra tags per entity type
+        if isinstance(entity, Client):
+            extra_tags = {
+                "clientUrl": entity.client_url or "",
+                "registeredBy": entity.registered_by or "",
+            }
+        elif isinstance(entity, MCP_Server):
+            extra_tags = {
+                "mcpUrl": entity.mcp_url or "",
+                "registeredBy": entity.registered_by or "",
+                "mcpUniqueRef": entity.mcp_unique_ref or "",
+            }
+        else:
+            extra_tags = {}
+
         # --- App Registration ---
         app_record = self._sync_record_repo.get_sync_record(lumen_id, SYNC_TYPE, RESOURCE_APP_REGISTRATION)
         app_id: str | None = None
 
         if app_record is None:
-            ms_object_id, app_id = self._app_reg_svc.create_app_registration(name, resource_type, lumen_id)
+            ms_object_id, app_id = self._app_reg_svc.create_app_registration(name, resource_type, lumen_id, extra_tags)
             self._sync_record_repo.upsert_sync_record(lumen_id, ms_object_id, SYNC_TYPE, RESOURCE_APP_REGISTRATION)
             logger.info("Created app registration: lumen_id=%s ms_object_id=%s app_id=%s", lumen_id, ms_object_id, app_id)
             summary.created += 1
@@ -310,7 +325,7 @@ class SyncOrchestrator:
             existing = self._app_reg_svc.get_app_registration(ms_object_id)
 
             if existing is None:
-                ms_object_id, app_id = self._app_reg_svc.create_app_registration(name, resource_type, lumen_id)
+                ms_object_id, app_id = self._app_reg_svc.create_app_registration(name, resource_type, lumen_id, extra_tags)
                 self._sync_record_repo.upsert_sync_record(lumen_id, ms_object_id, SYNC_TYPE, RESOURCE_APP_REGISTRATION)
                 logger.info("Re-created app registration (was 404): lumen_id=%s ms_object_id=%s", lumen_id, ms_object_id)
                 summary.created += 1
@@ -318,7 +333,7 @@ class SyncOrchestrator:
                 app_id = existing.get("appId")
                 if existing.get("displayName") != name:
                     old_name = existing.get("displayName")
-                    self._app_reg_svc.update_app_registration(ms_object_id, name, resource_type, lumen_id)
+                    self._app_reg_svc.update_app_registration(ms_object_id, name, resource_type, lumen_id, extra_tags)
                     logger.info("Updated app registration: lumen_id=%s old_name=%s new_name=%s", lumen_id, old_name, name)
                     summary.updated += 1
                 else:

@@ -20,10 +20,18 @@ class Group(Base):
 
 
 class Client(Base):
-    __tablename__ = "clients"
+    """Maps to the afa_clients_registry collection/table."""
+    __tablename__ = "afa_clients_registry"
 
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
+    id            = Column(String, primary_key=True)
+    name          = Column(String, nullable=True)
+    client_url    = Column(String, nullable=True)
+    description   = Column(String, nullable=True)
+    registered_by = Column(String, nullable=True)
+    enabled       = Column(Boolean, nullable=True, default=False)
+    is_deleted    = Column(Boolean, nullable=True, default=False)
+    created_at    = Column(DateTime, nullable=True)
+    updated_at    = Column(DateTime, nullable=True)
 
 
 class Agent(Base):
@@ -51,10 +59,25 @@ class Agent(Base):
 
 
 class MCP_Server(Base):
-    __tablename__ = "mcp_servers"
+    """Maps to the afa_mcp_registry collection/table."""
+    __tablename__ = "afa_mcp_registry"
 
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
+    id               = Column(String, primary_key=True)
+    name             = Column(String, nullable=True)
+    description      = Column(String, nullable=True)
+    mcp_url          = Column(String, nullable=True)
+    custom_tags      = Column(String, nullable=True)   # JSON-encoded string array
+    search_tags      = Column(String, nullable=True)   # JSON-encoded string array
+    tools            = Column(String, nullable=True)   # JSON-encoded string array
+    registered_by    = Column(String, nullable=True)
+    mcp_unique_ref   = Column(String, nullable=True)
+    eval_score_avg   = Column(String, nullable=True)
+    enabled          = Column(Boolean, nullable=True, default=False)
+    changes_detected = Column(Boolean, nullable=True, default=False)
+    synced_tools     = Column(String, nullable=True)   # JSON-encoded string array
+    is_deleted       = Column(Boolean, nullable=True, default=False)
+    created_at       = Column(DateTime, nullable=True)
+    updated_at       = Column(DateTime, nullable=True)
 
 
 class SyncRecord(Base):

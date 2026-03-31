@@ -30,8 +30,8 @@ SPONSOR_USER_ID = "47fc13ad-809c-41bb-9768-8d21f92e9dfd"
 
 AGENT_INSTANCE_OWNER_IDS: list[str] = [SPONSOR_USER_ID]
 
-# Agent Identity Blueprint ID used when creating agentInstances
-AGENT_BLUEPRINT_ID: str = os.environ.get("AGENT_BLUEPRINT_PRINCIPAL_ID")
+def get_agent_blueprint_id() -> str | None:
+    return os.environ.get("AGENT_BLUEPRINT_PRINCIPAL_ID")
 
 
 class LumenResourceType(str, Enum):

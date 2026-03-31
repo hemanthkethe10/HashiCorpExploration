@@ -25,7 +25,7 @@ class EntraGroupService:
         token = self._token_provider.get_token()
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-    def create_security_group(self, display_name: str, lumen_id: str) -> str:
+    def create_security_group(self, display_name: str, description: str, lumen_id: str) -> str:
         """Creates a security group, attaches the Lumen_ID extension, returns ms_object_id."""
         headers = self._auth_headers()
         logger.info("Creating security group: display_name=%s lumen_id=%s", display_name, lumen_id)
@@ -37,6 +37,7 @@ class EntraGroupService:
                 "mailEnabled": False,
                 "mailNickname": _slugify(display_name),
                 "securityEnabled": True,
+                "description":description
             },
             headers=headers,
         )
