@@ -4,7 +4,7 @@ import logging
 
 import requests
 
-from .config import GRAPH_BETA_URL, GRAPH_V1_URL, SPONSOR_USER_ID,LumenResourceType
+from .config import GRAPH_BETA_URL, GRAPH_V1_URL, SPONSOR_USER_ID, LumenResourceType
 from .token_provider import TokenProvider
 
 logger = logging.getLogger(__name__)
@@ -102,3 +102,57 @@ class AgentIdentityService:
             return
         response.raise_for_status()
         logger.info("Agent identity deleted: ms_object_id=%s", ms_object_id)
+
+    def create_agent_instance(
+        self,
+        display_name: str,
+        agent_url: str,
+        agent_card: dict,
+        agent_identity_id: str,
+        owner_ids: list[str],
+        blueprint_id: str,
+    ) -> str:
+        """Create an agentInstance in the Entra Agent Registry.
+        """
+        headers = self._auth_headers()
+        payload: dict = {
+            "displayName": display_name,
+            "url": agent_url,
+            "ownerIds": owner_ids,
+            "agentIdentityBlueprintId": blueprint_id,
+            "agentIdentityId": agent_identity_id,
+        }
+        if agent_card:
+            payload["agentCardManifest"] = agent_card
+
+        logger.info(
+            "Creating agentInstance: display_name=%s agent_identity_id=%s",
+            display_name, agent_identity_id,
+        )
+        response = requests.post(
+            f"{GRAPH_BETA_URL}/agentRegistry/agentInstances",
+            json=payload,
+            headers=headers,
+        )
+        logger.debug(
+            "POST /beta/agentRegistry/agentInstances status=%d body=%s",
+            response.status_code, response.text[:500],
+        )
+        response.raise_for_status()
+        instance_id: str = response.json()["id"]
+        logger.info("AgentInstance created: id=%s display_name=%s", instance_id, display_name)
+        return instance_id
+
+    def get_agent_instance(self, instance_id: str) -> dict | None:
+        """Returns the agentInstance dict or None on 404."""
+        logger.debug("Fetching agentInstance: id=%s", instance_id)
+        headers = self._auth_headers()
+        response = requests.get(
+            f"{GRAPH_BETA_URL}/agentRegistry/agentInstances/{instance_id}",
+            headers=headers,
+        )
+        if response.status_code == 404:
+            logger.warning("AgentInstance not found (404): id=%s", instance_id)
+            return None
+        response.raise_for_status()
+        return response.json()

@@ -1,10 +1,14 @@
 import logging
+import json
 from dataclasses import dataclass, field
 
 from .agent_identity_service import AgentIdentityService
 from .app_registration_service import AppRegistrationService
 from .config import (
+    AGENT_BLUEPRINT_ID,
+    AGENT_INSTANCE_OWNER_IDS,
     RESOURCE_AGENT_IDENTITY,
+    RESOURCE_AGENT_INSTANCE,
     RESOURCE_APP_REGISTRATION,
     RESOURCE_SECURITY_GROUP,
     RESOURCE_SERVICE_PRINCIPAL,
@@ -102,13 +106,13 @@ class SyncOrchestrator:
             # Step 5: Agents → Agent Identities (beta/servicePrincipals via blueprint)
             for agent in agents:
                 try:
-                    ms_id = self._sync_agent_identity(agent.id, agent.name, summary)
+                    ms_id = self._sync_agent_identity(agent, summary)
                     if ms_id:
                         member_ms_ids.append(ms_id)
                 except Exception as exc:
                     logger.error(
                         "Failed to sync agent identity for lumen_id=%s name=%s: %s",
-                        agent.id, agent.name, exc,
+                        agent.id, agent.afa_name, exc,
                     )
                     summary.failed += 1
                     summary.failed_entities.append({"lumen_id": agent.id, "reason": str(exc)})
@@ -202,8 +206,25 @@ class SyncOrchestrator:
 
         return ms_object_id
 
-    def _sync_agent_identity(self, lumen_id: str, name: str, summary: SyncSummary) -> str | None:
-        """Create or update an Entra Agent Identity for an Agent entity. Returns ms_object_id."""
+    def _sync_agent_identity(self, agent, summary: SyncSummary) -> str | None:
+        """Create or update an Entra Agent Identity, then create an agentInstance.
+
+        Returns the agent identity ms_object_id (used for group membership).
+        """
+
+        lumen_id = agent.id
+        name = agent.afa_name
+        agent_url = agent.agent_url or ""
+
+        # Parse agent_card — stored as a JSON string in the DB
+        agent_card: dict = {}
+        if agent.agent_card:
+            try:
+                agent_card = json.loads(agent.agent_card)
+            except Exception:
+                logger.warning("Could not parse agent_card for lumen_id=%s — sending empty manifest", lumen_id)
+
+        # --- Agent Identity ---
         record = self._sync_record_repo.get_sync_record(lumen_id, SYNC_TYPE, RESOURCE_AGENT_IDENTITY)
 
         if record is None:
@@ -211,23 +232,54 @@ class SyncOrchestrator:
             self._sync_record_repo.upsert_sync_record(lumen_id, ms_object_id, SYNC_TYPE, RESOURCE_AGENT_IDENTITY)
             logger.info("Created agent identity: lumen_id=%s ms_object_id=%s", lumen_id, ms_object_id)
             summary.created += 1
-            return ms_object_id
-
-        ms_object_id = record.ms_object_id
-        existing = self._agent_identity_svc.get_agent_identity(ms_object_id)
-
-        if existing is None:
-            ms_object_id = self._agent_identity_svc.create_agent_identity(name, lumen_id)
-            self._sync_record_repo.upsert_sync_record(lumen_id, ms_object_id, SYNC_TYPE, RESOURCE_AGENT_IDENTITY)
-            logger.info("Re-created agent identity (was 404): lumen_id=%s ms_object_id=%s", lumen_id, ms_object_id)
-            summary.created += 1
-        elif existing.get("displayName") != name:
-            old_name = existing.get("displayName")
-            self._agent_identity_svc.update_agent_identity(ms_object_id, name, lumen_id)
-            logger.info("Updated agent identity: lumen_id=%s old_name=%s new_name=%s", lumen_id, old_name, name)
-            summary.updated += 1
         else:
-            logger.info("Agent identity up-to-date: lumen_id=%s", lumen_id)
+            ms_object_id = record.ms_object_id
+            existing = self._agent_identity_svc.get_agent_identity(ms_object_id)
+
+            if existing is None:
+                ms_object_id = self._agent_identity_svc.create_agent_identity(name, lumen_id)
+                self._sync_record_repo.upsert_sync_record(lumen_id, ms_object_id, SYNC_TYPE, RESOURCE_AGENT_IDENTITY)
+                logger.info("Re-created agent identity (was 404): lumen_id=%s ms_object_id=%s", lumen_id, ms_object_id)
+                summary.created += 1
+            elif existing.get("displayName") != name:
+                old_name = existing.get("displayName")
+                self._agent_identity_svc.update_agent_identity(ms_object_id, name, lumen_id)
+                logger.info("Updated agent identity: lumen_id=%s old_name=%s new_name=%s", lumen_id, old_name, name)
+                summary.updated += 1
+            else:
+                logger.info("Agent identity up-to-date: lumen_id=%s", lumen_id)
+
+        # --- Agent Instance ---
+        instance_record = self._sync_record_repo.get_sync_record(lumen_id, SYNC_TYPE, RESOURCE_AGENT_INSTANCE)
+
+        if instance_record is None:
+            instance_id = self._agent_identity_svc.create_agent_instance(
+                display_name=name,
+                agent_url=agent_url,
+                agent_card=agent_card,
+                agent_identity_id=ms_object_id,
+                owner_ids=AGENT_INSTANCE_OWNER_IDS,
+                blueprint_id=AGENT_BLUEPRINT_ID,
+            )
+            self._sync_record_repo.upsert_sync_record(lumen_id, instance_id, SYNC_TYPE, RESOURCE_AGENT_INSTANCE)
+            logger.info("Created agentInstance: lumen_id=%s instance_id=%s", lumen_id, instance_id)
+            summary.created += 1
+        else:
+            existing_instance = self._agent_identity_svc.get_agent_instance(instance_record.ms_object_id)
+            if existing_instance is None:
+                instance_id = self._agent_identity_svc.create_agent_instance(
+                    display_name=name,
+                    agent_url=agent_url,
+                    agent_card=agent_card,
+                    agent_identity_id=ms_object_id,
+                    owner_ids=AGENT_INSTANCE_OWNER_IDS,
+                    blueprint_id=AGENT_BLUEPRINT_ID,
+                )
+                self._sync_record_repo.upsert_sync_record(lumen_id, instance_id, SYNC_TYPE, RESOURCE_AGENT_INSTANCE)
+                logger.info("Re-created agentInstance (was 404): lumen_id=%s instance_id=%s", lumen_id, instance_id)
+                summary.created += 1
+            else:
+                logger.info("AgentInstance up-to-date: lumen_id=%s", lumen_id)
 
         return ms_object_id
 
