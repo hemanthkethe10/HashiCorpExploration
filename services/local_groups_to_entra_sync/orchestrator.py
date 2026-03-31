@@ -80,7 +80,15 @@ class SyncOrchestrator:
                 continue
 
             # Step 4: Resolve members
-            members = group.members or {}
+            raw_members = group.members or "{}"
+            if isinstance(raw_members, str):
+                try:
+                    members = json.loads(raw_members)
+                except Exception:
+                    logger.warning("Could not parse members JSON for lumen_id=%s — skipping members", group.id)
+                    members = {}
+            else:
+                members = raw_members
             client_ids = members.get("client_ids") or []
             agent_ids = members.get("agent_ids") or []
             mcp_server_ids = members.get("mcp_server_ids") or []

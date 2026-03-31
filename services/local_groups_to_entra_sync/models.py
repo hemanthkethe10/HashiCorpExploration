@@ -5,16 +5,18 @@ Base = declarative_base()
 
 
 class Group(Base):
-    __tablename__ = "groups"
+    """Maps to the afa_peer_groups_registry collection/table."""
+    __tablename__ = "afa_peer_groups_registry"
 
-    id = Column(String, primary_key=True)   # Lumen_ID
-    name = Column(String, nullable=False)    # Lumen_Name
-    description = Column(String, nullable=True)
-    members = Column(JSON)                   # {agent_ids: [], client_ids: [], mcp_server_ids: []}
-    policy_ids = Column(JSON)                # stored, not processed
-    registered_by = Column(String)
-    created_at = Column(DateTime)
-    updated_at = Column(DateTime)
+    id            = Column(String, primary_key=True)   # Lumen_ID, pushed to Entra extension
+    name          = Column(String, nullable=True)       # Lumen_Name — nullable, groups without name are skipped
+    description   = Column(String, nullable=True)
+    members       = Column(String, nullable=True)       # JSON-encoded string: {"agent_ids":[], "client_ids":[], "mcp_server_ids":[]}
+    policy_ids    = Column(String, nullable=True)       # JSON-encoded string array, stored but not processed
+    registered_by = Column(String, nullable=True)
+    is_deleted    = Column(Boolean, nullable=True, default=False)
+    created_at    = Column(DateTime, nullable=True)
+    updated_at    = Column(DateTime, nullable=True)
 
 
 class Client(Base):
