@@ -2,6 +2,7 @@ import logging
 
 import requests
 
+from .base_service import GraphService
 from .config import GRAPH_V1_URL, RETRY_BACKOFF_SECONDS, RETRY_COUNT
 from .http_utils import post_with_retry
 from .token_provider import TokenProvider
@@ -9,15 +10,9 @@ from .token_provider import TokenProvider
 logger = logging.getLogger(__name__)
 
 
-class AppRegistrationService:
+class AppRegistrationService(GraphService):
     def __init__(self, token_provider: TokenProvider):
-        self._token_provider = token_provider
-
-    def _auth_headers(self) -> dict:
-        token = self._token_provider.get_token()
-        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-
+        super().__init__(token_provider)
     def create_app_registration(self, display_name: str, resource_type: str, resource_id: str, extra_tags: dict | None = None) -> tuple[str, str]:
         """Create an app registration with Lumen resource tags.
 

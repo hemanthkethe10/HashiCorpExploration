@@ -1,12 +1,10 @@
 import logging
 import json
-from dataclasses import dataclass, field
 
 from .agent_identity_service import AgentIdentityService
 from .app_registration_service import AppRegistrationService
 from .config import (
     get_agent_blueprint_id,
-    AGENT_INSTANCE_OWNER_IDS,
     RESOURCE_AGENT_IDENTITY,
     RESOURCE_AGENT_INSTANCE,
     RESOURCE_APP_REGISTRATION,
@@ -17,20 +15,13 @@ from .config import (
 )
 from .entra_group_service import EntraGroupService
 from .repositories import GroupRepository, SyncRecordRepository
+from .schemas import SyncSummaryResponse, EntityFailure
 from .token_provider import TokenProvider
 
 logger = logging.getLogger(__name__)
 
-
-
-@dataclass
-class SyncSummary:
-    created: int = 0
-    updated: int = 0
-    skipped: int = 0
-    failed: int = 0
-    skipped_entities: list[dict] = field(default_factory=list)
-    failed_entities: list[dict] = field(default_factory=list)
+# Keep the old name as an alias so existing imports don't break
+SyncSummary = SyncSummaryResponse
 
 
 class SyncOrchestrator:
@@ -64,7 +55,7 @@ class SyncOrchestrator:
             if not group.name:
                 logger.warning("Skipping group with null/empty name: lumen_id=%s", group.id)
                 summary.skipped += 1
-                summary.skipped_entities.append({"lumen_id": group.id, "reason": "null or empty name"})
+                summary.skipped_entities.append(EntityFailure(lumen_id=group.id, reason="null or empty name"))
                 continue
 
             # Step 3: Create/update the Entra security group for this peer group
@@ -76,7 +67,7 @@ class SyncOrchestrator:
                     group.id, group.name, exc,
                 )
                 summary.failed += 1
-                summary.failed_entities.append({"lumen_id": group.id, "reason": str(exc)})
+                summary.failed_entities.append(EntityFailure(lumen_id=group.id, reason=str(exc)))
                 continue
 
             # Step 4: Resolve members
@@ -123,7 +114,7 @@ class SyncOrchestrator:
                         agent.id, agent.afa_name, exc,
                     )
                     summary.failed += 1
-                    summary.failed_entities.append({"lumen_id": agent.id, "reason": str(exc)})
+                    summary.failed_entities.append(EntityFailure(lumen_id=agent.id, reason=str(exc)))
 
             # Step 6: Clients → App Registrations
             for client in clients:
@@ -137,7 +128,7 @@ class SyncOrchestrator:
                         client.id, client.name, exc,
                     )
                     summary.failed += 1
-                    summary.failed_entities.append({"lumen_id": client.id, "reason": str(exc)})
+                    summary.failed_entities.append(EntityFailure(lumen_id=client.id, reason=str(exc)))
 
             # Step 7: MCP Servers → App Registrations
             for mcp in mcp_servers:
@@ -151,7 +142,7 @@ class SyncOrchestrator:
                         mcp.id, mcp.name, exc,
                     )
                     summary.failed += 1
-                    summary.failed_entities.append({"lumen_id": mcp.id, "reason": str(exc)})
+                    summary.failed_entities.append(EntityFailure(lumen_id=mcp.id, reason=str(exc)))
 
             # Step 8: Add all provisioned members to the security group
             if group_ms_id:
@@ -164,10 +155,10 @@ class SyncOrchestrator:
                             member_ms_id, group_ms_id, exc,
                         )
                         summary.failed += 1
-                        summary.failed_entities.append({
-                            "lumen_id": group.id,
-                            "reason": f"add_member failed for member {member_ms_id}: {exc}",
-                        })
+                        summary.failed_entities.append(EntityFailure(
+                            lumen_id=group.id,
+                            reason=f"add_member failed for member {member_ms_id}: {exc}",
+                        ))
 
         # Step 9: Emit summary
         logger.info(
@@ -175,9 +166,9 @@ class SyncOrchestrator:
             summary.created, summary.updated, summary.skipped, summary.failed,
         )
         for entry in summary.skipped_entities:
-            logger.warning("Skipped entity: lumen_id=%s reason=%s", entry["lumen_id"], entry["reason"])
+            logger.warning("Skipped entity: lumen_id=%s reason=%s", entry.lumen_id, entry.reason)
         for entry in summary.failed_entities:
-            logger.error("Failed entity: lumen_id=%s reason=%s", entry["lumen_id"], entry["reason"])
+            logger.error("Failed entity: lumen_id=%s reason=%s", entry.lumen_id, entry.reason)
 
         return summary
 
@@ -224,8 +215,6 @@ class SyncOrchestrator:
         name = agent.afa_name
         agent_url = agent.agent_url or ""
 
-        agent_card = agent.agent_card
-
         # --- Agent Identity ---
         record = self._sync_record_repo.get_sync_record(lumen_id, SYNC_TYPE, RESOURCE_AGENT_IDENTITY)
 
@@ -258,9 +247,7 @@ class SyncOrchestrator:
             instance_id = self._agent_identity_svc.create_agent_instance(
                 display_name=name,
                 agent_url=agent_url,
-                agent_card=agent_card,
                 agent_identity_id=ms_object_id,
-                owner_ids=AGENT_INSTANCE_OWNER_IDS,
                 blueprint_id=get_agent_blueprint_id(),
             )
             self._sync_record_repo.upsert_sync_record(lumen_id, instance_id, SYNC_TYPE, RESOURCE_AGENT_INSTANCE)
@@ -272,9 +259,7 @@ class SyncOrchestrator:
                 instance_id = self._agent_identity_svc.create_agent_instance(
                     display_name=name,
                     agent_url=agent_url,
-                    agent_card=agent_card,
                     agent_identity_id=ms_object_id,
-                    owner_ids=AGENT_INSTANCE_OWNER_IDS,
                     blueprint_id=get_agent_blueprint_id(),
                 )
                 self._sync_record_repo.upsert_sync_record(lumen_id, instance_id, SYNC_TYPE, RESOURCE_AGENT_INSTANCE)

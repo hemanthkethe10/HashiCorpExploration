@@ -3,6 +3,7 @@ import re
 
 import requests
 
+from .base_service import GraphService
 from .config import GRAPH_V1_URL, GROUP_EXTENSION_NAME, RETRY_BACKOFF_SECONDS, RETRY_COUNT
 from .http_utils import post_with_retry
 from .token_provider import TokenProvider
@@ -17,13 +18,9 @@ def _slugify(name: str) -> str:
     return slug.strip("-") or "group"
 
 
-class EntraGroupService:
+class EntraGroupService(GraphService):
     def __init__(self, token_provider: TokenProvider):
-        self._token_provider = token_provider
-
-    def _auth_headers(self) -> dict:
-        token = self._token_provider.get_token()
-        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        super().__init__(token_provider)
 
     def create_security_group(self, display_name: str, description: str, lumen_id: str) -> str:
         """Creates a security group, attaches the Lumen_ID extension, returns ms_object_id."""

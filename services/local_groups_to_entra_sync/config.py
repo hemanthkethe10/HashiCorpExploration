@@ -24,11 +24,12 @@ RESOURCE_AGENT_INSTANCE = "agent_instance"
 RETRY_COUNT = 5
 RETRY_BACKOFF_SECONDS = 3.0
 
-# TODO: Move SPONSOR_USER_ID to an environment variable (AGENT_SPONSOR_USER_ID)
-#       so it can be configured per deployment without a code change.
-SPONSOR_USER_ID = "47fc13ad-809c-41bb-9768-8d21f92e9dfd"
+def get_sponsor_user_id() -> str:
+    val = os.environ.get("AGENT_SPONSOR_USER_ID")
+    if not val:
+        raise ValueError("AGENT_SPONSOR_USER_ID env var is required")
+    return val
 
-AGENT_INSTANCE_OWNER_IDS: list[str] = [SPONSOR_USER_ID]
 
 def get_agent_blueprint_id() -> str | None:
     return os.environ.get("AGENT_BLUEPRINT_PRINCIPAL_ID")

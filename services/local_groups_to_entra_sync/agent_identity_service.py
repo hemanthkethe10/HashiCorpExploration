@@ -4,14 +4,14 @@ import logging
 
 import requests
 
-from .config import GRAPH_BETA_URL, GRAPH_V1_URL, SPONSOR_USER_ID, LumenResourceType
+from .base_service import GraphService
+from .config import GRAPH_BETA_URL, GRAPH_V1_URL, get_sponsor_user_id, LumenResourceType
 from .token_provider import TokenProvider
-from services.local_groups_to_entra_sync.utils.agent_card_mapper import map_local_agent_card_to_entra_manifest
 
 logger = logging.getLogger(__name__)
 
 
-class AgentIdentityService:
+class AgentIdentityService(GraphService):
     def __init__(self, token_provider: TokenProvider, blueprint_principal_id: str):
         """
         Args:
@@ -19,12 +19,8 @@ class AgentIdentityService:
             blueprint_principal_id:  Object ID of the agentIdentityBlueprintPrincipal
                                      service principal (AGENT_BLUEPRINT_PRINCIPAL_ID env var).
         """
-        self._token_provider = token_provider
+        super().__init__(token_provider)
         self._blueprint_principal_id = blueprint_principal_id
-
-    def _auth_headers(self) -> dict:
-        token = self._token_provider.get_token()
-        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     def create_agent_identity(self, display_name: str, resource_id: str) -> str:
         """Create a new agent identity service principal.
@@ -42,7 +38,7 @@ class AgentIdentityService:
             json={
                 "displayName": display_name,
                 "agentIdentityBlueprintId": self._blueprint_principal_id,
-                "sponsors@odata.bind": [f"{GRAPH_V1_URL}/users/{SPONSOR_USER_ID}"],
+                "sponsors@odata.bind": [f"{GRAPH_V1_URL}/users/{get_sponsor_user_id()}"],
                 "tags": [f"resourceType:{LumenResourceType.AGENT.value}", f"resourceId:{resource_id}"],
             },
             headers=headers,
@@ -82,7 +78,7 @@ class AgentIdentityService:
             f"{GRAPH_BETA_URL}/servicePrincipals/{ms_object_id}",
             json={
                 "displayName": display_name,
-                "tags": [F"resourceType:{LumenResourceType.AGENT.value}", f"resourceId:{resource_id}"],
+                "tags": [f"resourceType:{LumenResourceType.AGENT.value}", f"resourceId:{resource_id}"],
             },
             headers=headers,
         )
@@ -108,9 +104,7 @@ class AgentIdentityService:
         self,
         display_name: str,
         agent_url: str,
-        agent_card: dict,
         agent_identity_id: str,
-        owner_ids: list[str],
         blueprint_id: str,
     ) -> str:
         """Create an agentInstance in the Entra Agent Registry.

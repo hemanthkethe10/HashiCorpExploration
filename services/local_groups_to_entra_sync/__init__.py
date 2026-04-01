@@ -1,5 +1,8 @@
 # local_groups_to_entra_sync service package
 
-from .orchestrator import SyncOrchestrator, SyncSummary
+from .orchestrator import SyncOrchestrator
+from .schemas import SyncSummaryResponse
 
-__all__ = ["SyncOrchestrator", "SyncSummary"]
+SyncSummary = SyncSummaryResponse  # backwards-compat alias
+
+__all__ = ["SyncOrchestrator", "SyncSummary", "SyncSummaryResponse"]

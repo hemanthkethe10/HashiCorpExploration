@@ -22,7 +22,6 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
@@ -31,8 +30,9 @@ from .app_registration_service import AppRegistrationService
 from .entra_group_service import EntraGroupService
 from .exceptions import AuthenticationError
 from .models import Agent, Base, Client, Group, MCP_Server
-from .orchestrator import SyncOrchestrator, SyncSummary
+from .orchestrator import SyncOrchestrator
 from .repositories import GroupRepository, SyncRecordRepository
+from .schemas import AddMemberRequest, CreateAgentRegistryRequest, SyncSummaryResponse
 from .token_provider import TokenProvider
 
 load_dotenv()
@@ -113,8 +113,8 @@ def _build_orchestrator() -> SyncOrchestrator:
     )
 
 
-@app.post("/sync", response_model=SyncSummary, summary="Trigger a full synchronization run")
-def trigger_sync() -> SyncSummary:
+@app.post("/sync", response_model=SyncSummaryResponse, summary="Trigger a full synchronization run")
+def trigger_sync() -> SyncSummaryResponse:
     """Start a synchronization run.
 
     Reads all local groups from the database and mirrors them as Entra
@@ -236,11 +236,6 @@ def seed_database() -> dict:
         raise HTTPException(status_code=500, detail=f"Seed failed: {exc}")
     finally:
         session.close()
-
-
-class AddMemberRequest(BaseModel):
-    group_id: str
-    member_id: str
 
 
 @app.post("/test/agent-identity", summary="[TEST] Create a single agent identity")
@@ -372,13 +367,6 @@ def cleanup() -> dict:
     return {"deleted": deleted, "failed": failed, "errors": errors}
 
 
-class CreateAgentRegistryRequest(BaseModel):
-    display_name: str
-    agent_url: str
-    agent_card: dict
-    owner_ids: list[str] = []
-
-
 @app.post("/test/agent-registry", summary="[TEST] Create a single agent instance in the Entra Agent Registry")
 def test_create_agent_registry(body: CreateAgentRegistryRequest) -> dict:
     """Create one agent identity + agent instance and return their IDs.
@@ -389,8 +377,6 @@ def test_create_agent_registry(body: CreateAgentRegistryRequest) -> dict:
     Body:
         display_name: display name for the agent identity and instance
         agent_url:    the A2A endpoint URL for the agent
-        agent_card:   the raw local agent card dict (will be mapped to agentCardManifest)
-        owner_ids:    optional list of owner object IDs
     """
     try:
         token_provider = TokenProvider(
@@ -415,9 +401,7 @@ def test_create_agent_registry(body: CreateAgentRegistryRequest) -> dict:
         instance_id = svc.create_agent_instance(
             display_name=body.display_name,
             agent_url=body.agent_url,
-            agent_card=body.agent_card,
             agent_identity_id=agent_identity_id,
-            owner_ids=body.owner_ids,
             blueprint_id=blueprint_principal_id,
         )
     except Exception as exc:
