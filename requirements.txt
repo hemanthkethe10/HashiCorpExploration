@@ -1,0 +1,21 @@
+# Web framework
+fastapi==0.115.0
+uvicorn==0.32.0
+
+# JWT signing and RSA key handling
+PyJWT==2.10.1
+cryptography==42.0.8
+
+# Environment variables
+python-dotenv==1.1.0
+
+# Database (existing local_groups_to_entra_sync service)
+SQLAlchemy==2.0.46
+psycopg2-binary==2.9.9
+
+# HTTP client (Graph API calls)
+requests==2.32.4
+
+# Testing
+pytest==8.4.1
+hypothesis==6.131.18
