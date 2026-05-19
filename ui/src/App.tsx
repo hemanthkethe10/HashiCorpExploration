@@ -85,7 +85,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>RA-Agent Chat</h1>
+        <h1>Azure Entra PIM Access Check Agent</h1>
         <div className="header-actions">
           <button type="button" onClick={() => void loadDbContext(true)} disabled={isDbLoading}>
             {isDbLoading ? "Checking DB…" : "Test DB connection"}
@@ -96,15 +96,30 @@ export default function App() {
         </div>
       </header>
 
-      <details className="db-panel" open={dbContext !== null && !dbContext.available}>
+      <details
+        className="db-panel"
+        open={dbContext !== null && dbContext.status === "unavailable"}
+      >
         <summary>
           Database connection
           {dbContext && (
-            <span className={`db-status ${dbContext.available ? "available" : "unavailable"}`}>
+            <span
+              className={`db-status ${
+                dbContext.status === "unavailable"
+                  ? "unavailable"
+                  : dbContext.status === "empty"
+                    ? "empty"
+                    : "available"
+              }`}
+            >
               ● {dbContext.status}
+              {dbContext.connected ? "" : " (not connected)"}
             </span>
           )}
         </summary>
+        {dbContext?.checked_at && (
+          <p className="db-status-detail">Last checked: {dbContext.checked_at}</p>
+        )}
         {dbContext?.message && (
           <p className="db-status-detail">{dbContext.message}</p>
         )}
@@ -115,7 +130,7 @@ export default function App() {
         <div className="message-list" ref={listRef} role="log" aria-live="polite">
           {messages.length === 0 ? (
             <p className="empty-state">
-              Ask RA-Agent-001 anything. Chat history is saved in this browser only.
+              Ask the Azure Entra PIM Access Check Agent anything. Chat history is saved in this browser only.
             </p>
           ) : (
             messages.map((message) => (

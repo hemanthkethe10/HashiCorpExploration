@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.agent_service import AgentService, ChatTurn
 from app.config import Settings, load_settings
-from app.cosmos import CosmosDbContextResult, CosmosDbCountResult
+from app.cosmos import CosmosDbContextResult, CosmosDbCountResult, CosmosDbService
 from app.graph_pim import GraphPimClient
 from app.routers.pim import router as pim_router
 
@@ -28,7 +28,9 @@ class DbContextResponse(BaseModel):
     context: str
     status: Literal["connected", "empty", "unavailable"]
     available: bool
+    connected: bool
     message: str | None = None
+    checked_at: str | None = None
 
 
 class DbCountResponse(BaseModel):
@@ -37,7 +39,9 @@ class DbCountResponse(BaseModel):
     collection: str
     status: Literal["connected", "empty", "unavailable"]
     available: bool
+    connected: bool
     message: str | None = None
+    checked_at: str | None = None
 
 
 def get_agent_service(request: Request) -> AgentService:
@@ -50,14 +54,17 @@ def get_agent_service(request: Request) -> AgentService:
 def create_app(settings: Settings) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.agent_service = AgentService(settings)
+        cosmos = CosmosDbService(settings)
+        app.state.cosmos_service = cosmos
+        app.state.agent_service = AgentService(settings, cosmos)
         app.state.graph_pim_client = GraphPimClient(settings)
-        logger.info("Agent ready (OpenAI + Cosmos DB tools + Graph PIM).")
+        logger.info("Azure Entra PIM Access Check Agent ready (OpenAI + Cosmos DB tools + Graph PIM).")
         yield
+        app.state.cosmos_service = None
         app.state.agent_service = None
         app.state.graph_pim_client = None
 
-    application = FastAPI(title="RA-Agent Chat API", lifespan=lifespan)
+    application = FastAPI(title="Azure Entra PIM Access Check Agent API", lifespan=lifespan)
     application.include_router(pim_router)
     application.add_middleware(
         CORSMiddleware,
@@ -74,7 +81,9 @@ def _to_db_response(result: CosmosDbContextResult) -> DbContextResponse:
         context=result.context,
         status=result.status.value,
         available=result.available,
+        connected=result.connected,
         message=result.message,
+        checked_at=result.checked_at,
     )
 
 
@@ -85,7 +94,9 @@ def _to_count_response(result: CosmosDbCountResult) -> DbCountResponse:
         collection=result.collection,
         status=result.status.value,
         available=result.available,
+        connected=result.connected,
         message=result.message,
+        checked_at=result.checked_at,
     )
 
 
@@ -109,8 +120,8 @@ async def get_db_context(
 async def reload_db_context(
     service: Annotated[AgentService, Depends(get_agent_service)],
 ) -> DbContextResponse:
-    """Re-run token acquisition and Cosmos fetch (e.g. after PIM activation)."""
-    return _to_db_response(service.fetch_db_context())
+    """Re-run token acquisition (force refresh) and Cosmos fetch."""
+    return _to_db_response(service.fetch_db_context(force_refresh_token=True))
 
 
 @app.get("/api/db-count", response_model=DbCountResponse)

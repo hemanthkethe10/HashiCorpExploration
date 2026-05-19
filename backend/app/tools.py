@@ -1,45 +1,41 @@
+import logging
 from collections.abc import Sequence
 
 from agent_framework import tool
 
-from app.config import Settings
-from app.cosmos import get_cosmos_db_context, get_cosmos_db_record_count
+from app.cosmos import CosmosDbService
 
-AGENT_INSTRUCTIONS = """You are RA-Agent-001.
+logger = logging.getLogger(__name__)
+
+AGENT_INSTRUCTIONS = """You are the Azure Entra PIM Access Check Agent.
 
 When the user asks about onboarding, account, or database data:
-- Use fetch_cosmos_database_record to load a sample document from Azure Cosmos DB.
-- Use fetch_cosmos_database_record_count when the user asks how many records, rows,
-  documents, or entries exist in the database (or similar count questions).
+- You MUST call fetch_cosmos_database_record or fetch_cosmos_database_record_count
+  before answering. Do not use earlier chat messages as a source of database facts.
+- Use fetch_cosmos_database_record for sample record content.
+- Use fetch_cosmos_database_record_count for how many records/documents exist.
 
-Summarize tool results in clear, concise language. For count questions, state the
-exact count returned by the tool.
+Summarize tool results in clear, concise language.
 
-If a tool reports that data is unavailable, explain that Cosmos DB could not be
-reached (for example, Entra credentials or PIM role not active). Do not invent data.
+If a tool returns that data is unavailable, say Cosmos DB could not be reached.
+Do not invent database values.
 """
 
 
-def create_cosmos_tools(settings: Settings) -> Sequence[object]:
+def create_cosmos_tools(cosmos: CosmosDbService) -> Sequence[object]:
     @tool(approval_mode="never_require")
     def fetch_cosmos_database_record() -> str:
         """Fetch a sample onboarding record from Azure Cosmos DB (Mongo API) via Entra ID."""
-        result = get_cosmos_db_context(
-            cosmos_account_name=settings.cosmos_account_name,
-            mongo_db_name=settings.mongo_db_name,
-            mongo_collection_name=settings.mongo_collection_name,
-        )
+        logger.info("Agent tool invoked: fetch_cosmos_database_record")
+        result = cosmos.get_context(force_refresh_token=False)
         return result.context
 
     @tool(approval_mode="never_require")
     def fetch_cosmos_database_record_count() -> str:
         """Return the total number of documents in the Azure Cosmos DB collection."""
-        result = get_cosmos_db_record_count(
-            cosmos_account_name=settings.cosmos_account_name,
-            mongo_db_name=settings.mongo_db_name,
-            mongo_collection_name=settings.mongo_collection_name,
-        )
-        if not result.available:
+        logger.info("Agent tool invoked: fetch_cosmos_database_record_count")
+        result = cosmos.get_record_count(force_refresh_token=False)
+        if not result.connected:
             return (
                 "Database count unavailable due to authorization or connectivity state."
                 + (f" Detail: {result.message}" if result.message else "")
