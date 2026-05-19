@@ -13,5 +13,7 @@ export interface DbContextResult {
   context: string;
   status: DbConnectionStatus;
   available: boolean;
+  connected: boolean;
   message?: string | null;
+  checked_at?: string | null;
 }

@@ -119,6 +119,10 @@ button.primary:hover:not(:disabled) {
   color: var(--error);
 }
 
+.db-status.empty {
+  color: #eab308;
+}
+
 .db-status-detail {
   margin: 0.5rem 0 0;
   font-size: 0.8rem;

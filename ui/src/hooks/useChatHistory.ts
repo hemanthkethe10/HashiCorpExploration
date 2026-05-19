@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { ChatMessage } from "../types";
 
-const STORAGE_KEY = "ra-agent-chat-history";
+const STORAGE_KEY = "azure-entra-pim-access-check-agent-history";
 
 function loadHistory(): ChatMessage[] {
   try {

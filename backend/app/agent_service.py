@@ -6,7 +6,7 @@ from agent_framework.openai import OpenAIChatClient
 from pydantic import BaseModel, Field
 
 from app.config import Settings
-from app.cosmos import CosmosDbContextResult, CosmosDbCountResult, get_cosmos_db_context, get_cosmos_db_record_count
+from app.cosmos import CosmosDbContextResult, CosmosDbCountResult, CosmosDbService
 from app.tools import AGENT_INSTRUCTIONS, create_cosmos_tools
 
 logger = logging.getLogger(__name__)
@@ -20,23 +20,16 @@ class ChatTurn(BaseModel):
 
 
 class AgentService:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, cosmos: CosmosDbService) -> None:
         self._settings = settings
+        self._cosmos = cosmos
         self._agent = self._create_agent()
 
-    def fetch_db_context(self) -> CosmosDbContextResult:
-        return get_cosmos_db_context(
-            cosmos_account_name=self._settings.cosmos_account_name,
-            mongo_db_name=self._settings.mongo_db_name,
-            mongo_collection_name=self._settings.mongo_collection_name,
-        )
+    def fetch_db_context(self, *, force_refresh_token: bool = False) -> CosmosDbContextResult:
+        return self._cosmos.get_context(force_refresh_token=force_refresh_token)
 
-    def fetch_db_count(self) -> CosmosDbCountResult:
-        return get_cosmos_db_record_count(
-            cosmos_account_name=self._settings.cosmos_account_name,
-            mongo_db_name=self._settings.mongo_db_name,
-            mongo_collection_name=self._settings.mongo_collection_name,
-        )
+    def fetch_db_count(self, *, force_refresh_token: bool = False) -> CosmosDbCountResult:
+        return self._cosmos.get_record_count(force_refresh_token=force_refresh_token)
 
     async def chat(self, messages: list[ChatTurn]) -> str:
         chat_messages = [Message(turn.role, [turn.content]) for turn in messages]
@@ -51,6 +44,6 @@ class AgentService:
         return Agent(
             client=client,
             instructions=AGENT_INSTRUCTIONS,
-            tools=create_cosmos_tools(self._settings),
+            tools=create_cosmos_tools(self._cosmos),
             default_options={"store": False},
         )
